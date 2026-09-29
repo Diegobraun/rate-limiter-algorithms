@@ -2,6 +2,8 @@
 
 Implementações dos seis algoritmos clássicos de rate limiting em Java 21, com a mesma interface, testes determinísticos, uma API Spring Boot que aplica cada um deles e um playground visual que coloca todos lado a lado sob o mesmo tráfego.
 
+![Playground comparando os seis algoritmos no cenário window-boundary](docs/playground.png)
+
 | Algoritmo | Estado por chave | Rajadas | Precisão | Quando usar |
 |---|---|---|---|---|
 | Fixed Window Counter | 2 longs | Até 2x o limite na virada da janela | Baixa | Cotas simples (ex.: 1000 req/dia) |
