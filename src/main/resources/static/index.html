@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rate Limiter Playground</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --text: #1d1d1b;
+    --muted: #6b6b66;
+    --border: #e2e2dd;
+    --allowed: #2f9e6b;
+    --delayed: #d99a1e;
+    --rejected: #d64545;
+    --grid: #d8d8d2;
+    --accent: #3b5bdb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514;
+      --surface: #1f1f1d;
+      --text: #ecece8;
+      --muted: #9a9a94;
+      --border: #33332f;
+      --allowed: #4cc38a;
+      --delayed: #f0b541;
+      --rejected: #f06a6a;
+      --grid: #3a3a36;
+      --accent: #7c95f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    align-items: end;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input, select, button {
+    font: inherit;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+  }
+  button { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
+  #pattern-description { color: var(--muted); font-size: 14px; margin: 0 0 20px; min-height: 21px; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 16px; flex-wrap: wrap; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 6px; vertical-align: -1px; background: var(--c);
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .card header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .card h2 { font-size: 17px; margin: 0; }
+  .card p { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+  .stats { display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .stats b { font-weight: 600; }
+  .over { color: var(--rejected); }
+  svg { width: 100%; height: 64px; display: block; }
+  .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .error { color: var(--rejected); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rate Limiter Playground</h1>
+  <p class="lead">Mesmo tráfego, seis algoritmos. Cada traço é uma requisição ao longo do tempo.</p>
+
+  <form id="controls">
+    <label>Padrão de tráfego <select id="pattern"></select></label>
+    <label>Limite <input id="limit" type="number" min="1" max="200" value="10"></label>
+    <label>Período (ms) <input id="periodMs" type="number" min="100" max="60000" value="1000"></label>
+    <label>Nº de períodos <input id="periods" type="number" min="1" max="20" value="6"></label>
+    <button type="submit">Simular</button>
+  </form>
+  <p id="pattern-description"></p>
+
+  <div class="legend">
+    <span style="--c: var(--allowed)">aceita</span>
+    <span style="--c: var(--delayed)">aceita com atraso (execução)</span>
+    <span style="--c: var(--rejected)">rejeitada</span>
+  </div>
+
+  <div id="results"></div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const svgNs = "http://www.w3.org/2000/svg";
+  let patterns = [];
+  let algorithms = {};
+
+  async function init() {
+    const [patternList, algorithmList] = await Promise.all([
+      fetch("/api/patterns").then((r) => r.json()),
+      fetch("/api/algorithms").then((r) => r.json()),
+    ]);
+    patterns = patternList;
+    algorithmList.forEach((a) => (algorithms[a.slug] = a));
+    $("pattern").innerHTML = patterns.map((p) => `<option value="${p.slug}">${p.slug}</option>`).join("");
+    $("pattern").value = "window-boundary";
+    $("pattern").addEventListener("change", simulate);
+    $("controls").addEventListener("submit", (e) => { e.preventDefault(); simulate(); });
+    simulate();
+  }
+
+  async function simulate() {
+    const pattern = $("pattern").value;
+    $("pattern-description").textContent = patterns.find((p) => p.slug === pattern)?.description ?? "";
+    const params = new URLSearchParams({
+      pattern,
+      limit: $("limit").value,
+      periodMs: $("periodMs").value,
+      periods: $("periods").value,
+    });
+    const response = await fetch(`/api/simulations?${params}`);
+    if (!response.ok) {
+      const problem = await response.json().catch(() => ({}));
+      $("results").innerHTML = `<p class="error">${problem.detail ?? "Parâmetros inválidos"}</p>`;
+      return;
+    }
+    render(await response.json());
+  }
+
+  function render(results) {
+    const container = $("results");
+    container.replaceChildren();
+    results.forEach((r) => container.appendChild(card(r)));
+  }
+
+  function card(r) {
+    const el = document.createElement("section");
+    el.className = "card";
+    const over = r.maxAllowedInAnyPeriod > r.limit;
+    el.innerHTML = `
+      <header>
+        <h2>${r.displayName}</h2>
+        <div class="stats">
+          <span>aceitas <b>${r.allowed}</b>/${r.total}</span>
+          <span>rejeitadas <b>${r.rejected}</b></span>
+          <span class="${over ? "over" : ""}">pico em 1 período <b>${r.maxAllowedInAnyPeriod}</b> (limite ${r.limit})</span>
+          <span>atraso médio <b>${r.averageDelayMs.toFixed(0)} ms</b></span>
+        </div>
+      </header>
+      <p>${algorithms[r.algorithm]?.description ?? ""}</p>`;
+    el.appendChild(timeline(r));
+    const axis = document.createElement("div");
+    axis.className = "axis";
+    axis.innerHTML = `<span>0 ms</span><span>${r.durationMs} ms</span>`;
+    el.appendChild(axis);
+    return el;
+  }
+
+  function timeline(r) {
+    const width = 1000;
+    const height = 64;
+    const svg = document.createElementNS(svgNs, "svg");
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    const x = (ms) => (ms / r.durationMs) * width;
+
+    for (let t = 0; t <= r.durationMs; t += r.periodMs) {
+      svg.appendChild(line(x(t), 0, x(t), height, "var(--grid)", 1, "4 4"));
+    }
+    r.events.forEach((e) => {
+      if (!e.allowed) {
+        svg.appendChild(line(x(e.arrivalMs), 36, x(e.arrivalMs), 60, "var(--rejected)", 1.5));
+      } else if (e.delayMs > 0) {
+        const at = x(e.arrivalMs + e.delayMs);
+        svg.appendChild(line(at, 4, at, 28, "var(--delayed)", 1.5));
+      } else {
+        svg.appendChild(line(x(e.arrivalMs), 4, x(e.arrivalMs), 28, "var(--allowed)", 1.5));
+      }
+    });
+    return svg;
+  }
+
+  function line(x1, y1, x2, y2, stroke, strokeWidth, dash) {
+    const l = document.createElementNS(svgNs, "line");
+    Object.entries({ x1, y1, x2, y2, stroke, "stroke-width": strokeWidth, "vector-effect": "non-scaling-stroke" })
+      .forEach(([k, v]) => l.setAttribute(k, v));
+    if (dash) l.setAttribute("stroke-dasharray", dash);
+    return l;
+  }
+
+  init();
+</script>
+</body>
+</html>

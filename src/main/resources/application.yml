@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: rate-limiter-algorithms
+  threads:
+    virtual:
+      enabled: true
+
+rate-limit:
+  limit: 5
+  period: 10s
